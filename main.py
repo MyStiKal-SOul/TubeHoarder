@@ -1,9 +1,21 @@
 # Bulk YouTube Acquisition Tool
-# Developer: Joshua Brooks
-# Version: 1.2.1
-# Last update: 2/13/2026
+# Developer: Joshua C Brooks
+# Github https://github.com/MyStiKal-SOul/TubeHoarder
+# Version: 2.0.0
+# Last update: 2/14/2026
+
+#2.0.0
+# Major revision - added ffmpeg exe to package to give the best quality of video and audio
+# ffmpeg 8.0.1 essentials build used
+# Cleaned up the code
+
+#1.2.2
+# Fixed resolution issue (now uses max video/audio available)
+# Removed thumbnail hashing and removed from HTML report
+
 
 import os
+import sys
 import hashlib
 import datetime
 import threading
@@ -17,10 +29,29 @@ from tkinter import ttk, messagebox, filedialog
 from yt_dlp import YoutubeDL
 
 settingFile = "settings.json"
-ui_queue = queue.Queue()
+UIQueue = queue.Queue()
 logLock = threading.Lock()
 
-def load_settings():
+def getBasePath():
+    if hasattr(sys, "_MEIPASS"):
+        return sys._MEIPASS
+    return os.path.abspath(".")
+
+def ffmpegPath():
+    base = getBasePath()
+    bundled = os.path.join(base, "ffmpeg")
+
+    # Check bundled version
+    if os.path.exists(os.path.join(bundled, "ffmpeg.exe")):
+        return bundled
+
+    # Check system version
+    if shutil.which("ffmpeg"):
+        return None  # system installed
+
+    return False  # not found
+
+def loadSettings():
     if os.path.exists(settingFile):
         with open(settingFile, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -37,12 +68,11 @@ def sha256Hash(path, chunk=8192):
             sha.update(block)
     return sha.hexdigest()
 
-def downloadThumbnail(thumbnail_url, save_path):
+def downloadThumbnail(thumbnailUrl, savePath):
     try:
-        with urllib.request.urlopen(thumbnail_url, timeout=15) as response:
-            data = response.read()
-            with open(save_path, "wb") as f:
-                f.write(data)
+        with urllib.request.urlopen(thumbnailUrl, timeout=15) as response:
+            with open(savePath, "wb") as f:
+                f.write(response.read())
         return True
     except:
         return False
@@ -61,8 +91,8 @@ def checkIPaddress():
             ips.append("ERROR")
     return ips
 
-def createHTMLlog(log_path, case, ip1, ip2, ip_status): #HTML Report
-    with open(log_path, "w", encoding="utf-8") as log:
+def createHTMLlog(logPath, case, ip1, ip2, ipStatus):
+    with open(logPath, "w", encoding="utf-8") as log:
         log.write(f"""<!DOCTYPE html>
 <html>
 <head>
@@ -70,9 +100,8 @@ def createHTMLlog(log_path, case, ip1, ip2, ip_status): #HTML Report
 <title>Case Report - {case}</title>
 <style>
 body {{ font-family: Arial; background:#f4f4f4; padding:20px; }}
-h1 {{ color:#333; }}
 table {{ width:100%; border-collapse:collapse; background:white; }}
-th, td {{ border:1px solid #ccc; padding:8px; text-align:left; }}
+th, td {{ border:1px solid #ccc; padding:8px; }}
 th {{ background:#222; color:white; }}
 .verified {{ color:green; font-weight:bold; }}
 .failed {{ color:red; font-weight:bold; }}
@@ -86,9 +115,9 @@ th {{ background:#222; color:white; }}
 <div class="meta">
 <strong>Case:</strong> {case}<br>
 <strong>Start UTC:</strong> {datetime.datetime.utcnow().isoformat()}<br>
-<strong>Public IP 1 by https://api.ipify.org:</strong> {ip1}<br>
-<strong>Public IP 2 by https://checkip.amazonaws.com:</strong> {ip2}<br>
-<strong>IP Verification:</strong> {ip_status}
+<strong>Public IP 1:</strong> {ip1}<br>
+<strong>Public IP 2:</strong> {ip2}<br>
+<strong>IP Verification:</strong> {ipStatus}
 </div>
 
 <table>
@@ -102,8 +131,8 @@ th {{ background:#222; color:white; }}
 </tr>
 """)
 
-def closeHTMLlog(log_path):
-    with open(log_path, "a", encoding="utf-8") as log:
+def closeHTMLlog(logPath):
+    with open(logPath, "a", encoding="utf-8") as log:
         log.write(f"""
 </table>
 <br><br>
@@ -111,6 +140,7 @@ def closeHTMLlog(log_path):
 </body>
 </html>
 """)
+
 
 def processVideo(url, videoDir, thumbDir, logFile, case):
 
@@ -121,15 +151,27 @@ def processVideo(url, videoDir, thumbDir, logFile, case):
                 percent = float(percent)
             except:
                 percent = 0
-            ui_queue.put((url, "PROGRESS", percent))
+            UIQueue.put((url, "PROGRESS", percent))
+
     try:
-        ydl_opts = {
+        ffmpegStatus = ffmpegPath()
+
+        ydlOpts = {
             "outtmpl": os.path.join(videoDir, f"{case}_%(title)s.%(ext)s"),
             "progress_hooks": [hook],
             "quiet": True,
             "no_warnings": True,
         }
-        with YoutubeDL(ydl_opts) as ydl:
+
+        if ffmpegStatus is False:
+            ydlOpts["format"] = "best"
+        else:
+            ydlOpts["format"] = "bestvideo+bestaudio/best"
+            ydlOpts["merge_output_format"] = "mp4"
+            if ffmpegStatus:
+                ydlOpts["ffmpeg_location"] = ffmpegStatus
+
+        with YoutubeDL(ydlOpts) as ydl:
             info = ydl.extract_info(url, download=True)
             temp_path = ydl.prepare_filename(info)
 
@@ -137,16 +179,12 @@ def processVideo(url, videoDir, thumbDir, logFile, case):
         videoID = info.get("id", "unknownid")
         thumbnailURL = info.get("thumbnail")
 
-        # Thumbnail
         thumbFilename = f"{videoID}_thumbnail.jpg"
         thumbPath = os.path.join(thumbDir, thumbFilename)
 
-        thumbnailHash = "N/A"
         if thumbnailURL:
-            if downloadThumbnail(thumbnailURL, thumbPath):
-                thumbnailHash = sha256Hash(thumbPath)
+            downloadThumbnail(thumbnailURL, thumbPath)
 
-        # Video Hash Verification
         hash1 = sha256Hash(temp_path)
         finalPath = os.path.join(videoDir, os.path.basename(temp_path))
         shutil.move(temp_path, finalPath)
@@ -165,11 +203,10 @@ def processVideo(url, videoDir, thumbDir, logFile, case):
 <td><a href="{url}" target="_blank">{url}</a></td>
 <td class="{css_class}">{status}</td>
 <td class="hash">{hash2}</td>
-<td class="hash">{thumbnailHash}</td>
 </tr>
 """)
 
-        ui_queue.put((url, "DONE", hash2))
+        UIQueue.put((url, "DONE", hash2))
 
     except Exception as e:
         with logLock:
@@ -182,21 +219,17 @@ def processVideo(url, videoDir, thumbDir, logFile, case):
 <td>{url}</td>
 <td class="failed">FAILED</td>
 <td>{str(e)}</td>
-<td>N/A</td>
 </tr>
 """)
-        ui_queue.put((url, "FAILED", str(e)))
+        UIQueue.put((url, "FAILED", str(e)))
 
-
-
-class App: #GUI
-
+class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("Forensic YouTube Acquisition Suite")
+        self.root.title("Bulk YouTube Acquisition Tool 2026")
         self.root.geometry("1000x650")
 
-        self.settings = load_settings()
+        self.settings = loadSettings()
         self.executor = None
         self.futures = []
 
@@ -244,7 +277,6 @@ class App: #GUI
             self.destinationEntry.insert(0, folder)
 
     def startCase(self):
-
         case = self.caseEntry.get().strip()
         threads = int(self.threadPicker.get())
         urls = [u.strip() for u in self.urlText.get("1.0", "end").split("\n") if u.strip()]
@@ -292,7 +324,7 @@ class App: #GUI
     def updatingUI(self):
         try:
             while True:
-                data = ui_queue.get_nowait()
+                data = UIQueue.get_nowait()
                 url = data[0]
                 if data[1] == "PROGRESS":
                     self.tree.item(url, values=("DOWNLOADING", f"{data[2]}%"))
@@ -309,3 +341,5 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = App(root)
     root.mainloop()
+
+
