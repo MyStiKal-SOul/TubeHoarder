@@ -1,25 +1,2 @@
-
-status = "VERIFIED" if hash1 == hash2 else "HASH_MISMATCH"
-
-Here’s what happens:
-The video is downloaded.
-The script calculates SHA256 → hash1
-The file is moved to final destination.
-The script calculates SHA256 again → hash2
-If both hashes match → VERIFIED
-
-What That Confirms
-It confirms:
-The file was not corrupted during move
-No modification occurred between write and final storage
-The file you logged is the exact file stored
-
-It does NOT confirm:
-That YouTube content itself is authentic
-That the video wasn’t edited before upload
-That the source URL is legitimate
-It only verifies local file integrity during acquisition.
-If hashes differ, you get:
-
-HASH_MISMATCH
-Which means corruption or modification occurred.
+Future fixes here
+  Add support for playlist and channels
